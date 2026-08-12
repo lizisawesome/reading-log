@@ -379,54 +379,66 @@ function allBooks(){
   return [...HIST, ...SHEET_BOOKS, ...localOnly];
 }
 
-// ── fetch from Google Sheets via JSONP (avoids CORS on mobile) ───────────────
+// ── fetch from Google Sheets (iframe + postMessage, bypasses CORS) ───────────
 function fetchFromSheets(){
   const url = getScriptUrl();
   if(!url) return;
   document.getElementById('fetchBar').classList.add('show');
   document.getElementById('syncStatus').textContent = 'Syncing…';
 
-  if(window._rlJsonpTimeout) clearTimeout(window._rlJsonpTimeout);
-  const existing = document.getElementById('_rlJsonpScript');
-  if(existing) existing.remove();
+  // Remove any previous iframe
+  const prev = document.getElementById('_rl_iframe');
+  if(prev) prev.remove();
+  if(window._rl_timer) clearTimeout(window._rl_timer);
 
-  window._rlJsonpTimeout = setTimeout(()=>{
-    document.getElementById('fetchBar').classList.remove('show');
-    document.getElementById('syncStatus').textContent = 'Sync timed out — showing local data';
-  }, 10000);
-
-  window._rlJsonpCallback = function(data){
-    clearTimeout(window._rlJsonpTimeout);
+  // Listen for the data coming back from the iframe
+  function onMessage(event){
+    // Only accept messages from Google's servers
+    if(!event.origin.includes('google') && !event.origin.includes('googleusercontent')) return;
+    clearTimeout(window._rl_timer);
+    window.removeEventListener('message', onMessage);
     document.getElementById('fetchBar').classList.remove('show');
     try {
-      if(data.books && Array.isArray(data.books)){
+      const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+      if(data && Array.isArray(data.books)){
         SHEET_BOOKS = data.books.map(b=>({
           ...b,
-          pages: b.pages ? Number(b.pages) : null,
+          pages:  b.pages  ? Number(b.pages)  : null,
           rating: b.rating ? Number(b.rating) : null,
-          year: b.year ? Number(b.year) : null,
-          month: b.month ? Number(b.month) : null,
+          year:   b.year   ? Number(b.year)   : null,
+          month:  b.month  ? Number(b.month)  : null,
           _id: b._id || ('sh'+(b.title||'')+(b.year||'')).replace(/\s/g,''),
           _fromSheet: true
         }));
-        document.getElementById('syncStatus').textContent = 'Synced · ' + SHEET_BOOKS.length + ' books from Sheets';
+        document.getElementById('syncStatus').textContent =
+          'Synced · ' + SHEET_BOOKS.length + ' books from Sheets';
         refresh();
+      } else {
+        document.getElementById('syncStatus').textContent = 'No books found in Sheet';
       }
-    } catch(e) {
-      document.getElementById('syncStatus').textContent = 'Sync error — showing local data';
+    } catch(err) {
+      document.getElementById('syncStatus').textContent = 'Sync error — ' + err.message;
     }
-  };
+  }
+  window.addEventListener('message', onMessage);
 
-  const script = document.createElement('script');
-  script.id = '_rlJsonpScript';
-  script.src = url + '?action=get&callback=_rlJsonpCallback';
-  script.onerror = ()=>{
-    clearTimeout(window._rlJsonpTimeout);
+  // Timeout
+  window._rl_timer = setTimeout(()=>{
+    window.removeEventListener('message', onMessage);
     document.getElementById('fetchBar').classList.remove('show');
-    document.getElementById('syncStatus').textContent = 'Sync failed — showing local data';
-  };
-  document.head.appendChild(script);
+    document.getElementById('syncStatus').textContent =
+      'Sync timed out — redeploy the Apps Script and try again';
+  }, 15000);
+
+  // Create a hidden iframe pointing to the Apps Script URL
+  // The script returns an HTML page that postMessages the data back
+  const iframe = document.createElement('iframe');
+  iframe.id = '_rl_iframe';
+  iframe.src = url + '?nocache=' + Date.now();
+  iframe.style.cssText = 'display:none;width:0;height:0;border:none;position:absolute;';
+  document.body.appendChild(iframe);
 }
+
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 function nG(g){
