@@ -379,32 +379,53 @@ function allBooks(){
   return [...HIST, ...SHEET_BOOKS, ...localOnly];
 }
 
-// ── fetch from Google Sheets ──────────────────────────────────────────────────
-async function fetchFromSheets(){
+// ── fetch from Google Sheets via JSONP (avoids CORS on mobile) ───────────────
+function fetchFromSheets(){
   const url = getScriptUrl();
   if(!url) return;
   document.getElementById('fetchBar').classList.add('show');
   document.getElementById('syncStatus').textContent = 'Syncing…';
-  try {
-    const res = await fetch(url + '?action=get', {method:'GET', mode:'cors'});
-    const data = await res.json();
-    if(data.books && Array.isArray(data.books)){
-      SHEET_BOOKS = data.books.map(b=>({
-        ...b,
-        pages: b.pages ? Number(b.pages) : null,
-        rating: b.rating ? Number(b.rating) : null,
-        year: b.year ? Number(b.year) : null,
-        month: b.month ? Number(b.month) : null,
-        _id: b._id || ('sh'+b.title+b.year).replace(/\s/g,''),
-        _fromSheet: true
-      }));
-      document.getElementById('syncStatus').textContent = `Synced · ${SHEET_BOOKS.length} books from Sheets`;
-      refresh();
+
+  if(window._rlJsonpTimeout) clearTimeout(window._rlJsonpTimeout);
+  const existing = document.getElementById('_rlJsonpScript');
+  if(existing) existing.remove();
+
+  window._rlJsonpTimeout = setTimeout(()=>{
+    document.getElementById('fetchBar').classList.remove('show');
+    document.getElementById('syncStatus').textContent = 'Sync timed out — showing local data';
+  }, 10000);
+
+  window._rlJsonpCallback = function(data){
+    clearTimeout(window._rlJsonpTimeout);
+    document.getElementById('fetchBar').classList.remove('show');
+    try {
+      if(data.books && Array.isArray(data.books)){
+        SHEET_BOOKS = data.books.map(b=>({
+          ...b,
+          pages: b.pages ? Number(b.pages) : null,
+          rating: b.rating ? Number(b.rating) : null,
+          year: b.year ? Number(b.year) : null,
+          month: b.month ? Number(b.month) : null,
+          _id: b._id || ('sh'+(b.title||'')+(b.year||'')).replace(/\s/g,''),
+          _fromSheet: true
+        }));
+        document.getElementById('syncStatus').textContent = 'Synced · ' + SHEET_BOOKS.length + ' books from Sheets';
+        refresh();
+      }
+    } catch(e) {
+      document.getElementById('syncStatus').textContent = 'Sync error — showing local data';
     }
-  } catch(e) {
+  };
+
+  const script = document.createElement('script');
+  script.id = '_rlJsonpScript';
+  script.src = url + '?action=get&callback=_rlJsonpCallback';
+  script.onerror = ()=>{
+    clearTimeout(window._rlJsonpTimeout);
+    document.getElementById('fetchBar').classList.remove('show');
     document.getElementById('syncStatus').textContent = 'Sync failed — showing local data';
-  }
-  document.getElementById('fetchBar').classList.remove('show');
+  };
+  document.head.appendChild(script);
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
