@@ -5,7 +5,51 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>My Reading Log</title>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=Source+Sans+3:wght@300;400;500;600&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js">
+// ── settings ──────────────────────────────────────────────────────────────────
+function showSettingsTab(){
+  const url = getScriptUrl();
+  document.getElementById('settings-url').value = url;
+  document.getElementById('settingsStatus').className = 'status-bar';
+}
+function saveSettingsUrl(){
+  const url = document.getElementById('settings-url').value.trim();
+  if(!url){ alert('Please enter a URL.'); return; }
+  localStorage.setItem('rl_script_url', url);
+  const s = document.getElementById('settingsStatus');
+  s.className = 'status-bar success'; s.textContent = '✓ URL saved! Testing connection…';
+  fetchFromSheets();
+  setTimeout(()=>{ s.className='status-bar'; }, 4000);
+}
+function clearSettingsUrl(){
+  if(!confirm('Clear the Script URL? The site will stop syncing with Google Sheets.')) return;
+  localStorage.removeItem('rl_script_url');
+  document.getElementById('settings-url').value = '';
+  document.getElementById('syncStatus').textContent = '';
+  SHEET_BOOKS = [];
+  refresh();
+  const s = document.getElementById('settingsStatus');
+  s.className = 'status-bar error'; s.textContent = 'URL cleared.';
+}
+function testSync(){
+  const url = document.getElementById('settings-url').value.trim();
+  if(!url){ alert('Enter a URL first.'); return; }
+  localStorage.setItem('rl_script_url', url);
+  const s = document.getElementById('settingsStatus');
+  s.className = 'status-bar loading'; s.textContent = 'Testing connection…';
+  fetchFromSheets();
+  // Show result after sync completes
+  setTimeout(()=>{
+    const status = document.getElementById('syncStatus').textContent;
+    if(status.includes('Synced')){
+      s.className = 'status-bar success'; s.textContent = '✓ Connected! ' + status;
+    } else if(status.includes('timed out') || status.includes('failed')){
+      s.className = 'status-bar error'; s.textContent = '⚠ ' + status;
+    }
+  }, 13000);
+}
+
+</script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -186,6 +230,7 @@ textarea{resize:vertical;min-height:70px}
   <button class="active" onclick="showTab('dashboard')">Dashboard</button>
   <button onclick="showTab('books')">All Books</button>
   <button onclick="showTab('add')">+ Add Book</button>
+  <button onclick="showTab('settings')">⚙ Settings</button>
 </nav>
 
 <main>
@@ -307,6 +352,34 @@ textarea{resize:vertical;min-height:70px}
   </div>
 </div>
 
+
+<!-- SETTINGS -->
+<div id="tab-settings" class="tab-content">
+  <div class="add-card" style="max-width:600px">
+    <div class="add-title">Settings</div>
+    <div class="add-sub">Manage your Google Sheets connection.</div>
+
+    <div style="margin-bottom:1.5rem">
+      <label style="display:block;font-size:10px;font-weight:600;color:var(--hint);text-transform:uppercase;letter-spacing:.08em;margin-bottom:.5rem">Google Apps Script URL</label>
+      <input type="text" id="settings-url" placeholder="https://script.google.com/macros/s/…/exec" style="width:100%;font-size:13px;padding:.6rem .8rem;border:1px solid var(--border);border-radius:5px;background:var(--bg);color:var(--text);outline:none;font-family:var(--ui)">
+      <div style="margin-top:.75rem;display:flex;gap:.75rem;align-items:center;flex-wrap:wrap">
+        <button class="btn-primary" onclick="saveSettingsUrl()">Save URL</button>
+        <button class="btn-secondary" onclick="testSync()">Test connection</button>
+        <button class="btn-danger" style="margin-left:0" onclick="clearSettingsUrl()">Clear URL</button>
+      </div>
+      <div class="status-bar" id="settingsStatus" style="margin-top:.75rem"></div>
+    </div>
+
+    <div style="background:var(--bg);border-radius:6px;padding:1rem;font-size:13px;color:var(--muted);border:1px solid var(--border-l)">
+      <strong style="color:var(--text-med);display:block;margin-bottom:.4rem">Where to find your Script URL</strong>
+      1. Go to script.google.com<br>
+      2. Open your "Reading Log" project<br>
+      3. Click Deploy → Manage deployments<br>
+      4. Copy the Web app URL
+    </div>
+  </div>
+</div>
+
 </main>
 
 <!-- EDIT MODAL -->
@@ -379,64 +452,55 @@ function allBooks(){
   return [...HIST, ...SHEET_BOOKS, ...localOnly];
 }
 
-// ── fetch from Google Sheets (iframe + postMessage, bypasses CORS) ───────────
+// ── fetch from Google Sheets (JSONP) ────────────────────────────────────────
 function fetchFromSheets(){
   const url = getScriptUrl();
-  if(!url) return;
+  if(!url){ 
+    document.getElementById('syncStatus').textContent = '';
+    return;
+  }
   document.getElementById('fetchBar').classList.add('show');
   document.getElementById('syncStatus').textContent = 'Syncing…';
 
-  // Remove any previous iframe
-  const prev = document.getElementById('_rl_iframe');
+  const prev = document.getElementById('_rl_script');
   if(prev) prev.remove();
   if(window._rl_timer) clearTimeout(window._rl_timer);
 
-  // Listen for the data coming back from the iframe
-  function onMessage(event){
-    // Only accept messages from Google's servers
-    if(!event.origin.includes('google') && !event.origin.includes('googleusercontent')) return;
-    clearTimeout(window._rl_timer);
-    window.removeEventListener('message', onMessage);
-    document.getElementById('fetchBar').classList.remove('show');
-    try {
-      const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
-      if(data && Array.isArray(data.books)){
-        SHEET_BOOKS = data.books.map(b=>({
-          ...b,
-          pages:  b.pages  ? Number(b.pages)  : null,
-          rating: b.rating ? Number(b.rating) : null,
-          year:   b.year   ? Number(b.year)   : null,
-          month:  b.month  ? Number(b.month)  : null,
-          _id: b._id || ('sh'+(b.title||'')+(b.year||'')).replace(/\s/g,''),
-          _fromSheet: true
-        }));
-        document.getElementById('syncStatus').textContent =
-          'Synced · ' + SHEET_BOOKS.length + ' books from Sheets';
-        refresh();
-      } else {
-        document.getElementById('syncStatus').textContent = 'No books found in Sheet';
-      }
-    } catch(err) {
-      document.getElementById('syncStatus').textContent = 'Sync error — ' + err.message;
-    }
-  }
-  window.addEventListener('message', onMessage);
-
-  // Timeout
   window._rl_timer = setTimeout(()=>{
-    window.removeEventListener('message', onMessage);
     document.getElementById('fetchBar').classList.remove('show');
-    document.getElementById('syncStatus').textContent =
-      'Sync timed out — redeploy the Apps Script and try again';
-  }, 15000);
+    document.getElementById('syncStatus').textContent = 'Sync timed out — check your Script URL in Settings';
+  }, 12000);
 
-  // Create a hidden iframe pointing to the Apps Script URL
-  // The script returns an HTML page that postMessages the data back
-  const iframe = document.createElement('iframe');
-  iframe.id = '_rl_iframe';
-  iframe.src = url + '?nocache=' + Date.now();
-  iframe.style.cssText = 'display:none;width:0;height:0;border:none;position:absolute;';
-  document.body.appendChild(iframe);
+  window._rl_cb = function(data){
+    clearTimeout(window._rl_timer);
+    document.getElementById('fetchBar').classList.remove('show');
+    if(data && Array.isArray(data.books)){
+      SHEET_BOOKS = data.books.map(b=>({
+        ...b,
+        pages:  b.pages  ? Number(b.pages)  : null,
+        rating: b.rating ? Number(b.rating) : null,
+        year:   b.year   ? Number(b.year)   : null,
+        month:  b.month  ? Number(b.month)  : null,
+        _id: b._id || ('sh'+(b.title||'')+(b.year||'')).replace(/\s/g,''),
+        _fromSheet: true
+      }));
+      document.getElementById('syncStatus').textContent =
+        'Synced · ' + SHEET_BOOKS.length + ' books from Sheets';
+      refresh();
+    } else {
+      document.getElementById('syncStatus').textContent = 'No books found in Sheet';
+    }
+  };
+
+  const s = document.createElement('script');
+  s.id = '_rl_script';
+  s.src = url + '?action=get&callback=_rl_cb&nocache=' + Date.now();
+  s.onerror = ()=>{
+    clearTimeout(window._rl_timer);
+    document.getElementById('fetchBar').classList.remove('show');
+    document.getElementById('syncStatus').textContent = 'Sync failed — check Script URL in Settings';
+  };
+  document.head.appendChild(s);
 }
 
 
@@ -776,10 +840,11 @@ function refresh(){
 // ── tabs ──────────────────────────────────────────────────────────────────────
 function showTab(name){
   document.querySelectorAll('.tab-content').forEach(el=>el.classList.remove('active'));
-  document.querySelectorAll('nav button').forEach((b,i)=>{b.classList.remove('active');if(['dashboard','books','add'][i]===name)b.classList.add('active');});
+  document.querySelectorAll('nav button').forEach((b,i)=>{b.classList.remove('active');if(['dashboard','books','add','settings'][i]===name)b.classList.add('active');});
   document.getElementById('tab-'+name).classList.add('active');
   if(name==='books')renderTablePage();
   if(name==='add'&&!getScriptUrl())document.getElementById('setupBanner').classList.add('show');
+  if(name==='settings')showSettingsTab();
 }
 function showToast(msg){
   const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');
@@ -795,6 +860,50 @@ function showToast(msg){
   document.getElementById('f-date').value=new Date().toISOString().split('T')[0];
   fetchFromSheets();  // pull from Google Sheets on load
 })();
+
+// ── settings ──────────────────────────────────────────────────────────────────
+function showSettingsTab(){
+  const url = getScriptUrl();
+  document.getElementById('settings-url').value = url;
+  document.getElementById('settingsStatus').className = 'status-bar';
+}
+function saveSettingsUrl(){
+  const url = document.getElementById('settings-url').value.trim();
+  if(!url){ alert('Please enter a URL.'); return; }
+  localStorage.setItem('rl_script_url', url);
+  const s = document.getElementById('settingsStatus');
+  s.className = 'status-bar success'; s.textContent = '✓ URL saved! Testing connection…';
+  fetchFromSheets();
+  setTimeout(()=>{ s.className='status-bar'; }, 4000);
+}
+function clearSettingsUrl(){
+  if(!confirm('Clear the Script URL? The site will stop syncing with Google Sheets.')) return;
+  localStorage.removeItem('rl_script_url');
+  document.getElementById('settings-url').value = '';
+  document.getElementById('syncStatus').textContent = '';
+  SHEET_BOOKS = [];
+  refresh();
+  const s = document.getElementById('settingsStatus');
+  s.className = 'status-bar error'; s.textContent = 'URL cleared.';
+}
+function testSync(){
+  const url = document.getElementById('settings-url').value.trim();
+  if(!url){ alert('Enter a URL first.'); return; }
+  localStorage.setItem('rl_script_url', url);
+  const s = document.getElementById('settingsStatus');
+  s.className = 'status-bar loading'; s.textContent = 'Testing connection…';
+  fetchFromSheets();
+  // Show result after sync completes
+  setTimeout(()=>{
+    const status = document.getElementById('syncStatus').textContent;
+    if(status.includes('Synced')){
+      s.className = 'status-bar success'; s.textContent = '✓ Connected! ' + status;
+    } else if(status.includes('timed out') || status.includes('failed')){
+      s.className = 'status-bar error'; s.textContent = '⚠ ' + status;
+    }
+  }, 13000);
+}
+
 </script>
 </body>
 </html>
