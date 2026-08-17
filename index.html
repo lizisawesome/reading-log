@@ -207,6 +207,12 @@ textarea{resize:vertical;min-height:70px}
 /* ── toast ── */
 .toast{position:fixed;bottom:1.5rem;left:50%;transform:translateX(-50%) translateY(8px);background:var(--accent-d);color:#e8f0fc;padding:.7rem 1.25rem;border-radius:6px;border-left:3px solid var(--gold);font-size:13px;opacity:0;transition:all .3s;pointer-events:none;z-index:300;white-space:nowrap}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* ── book covers ── */
+.cover-thumb{width:36px;height:54px;object-fit:cover;border-radius:3px;box-shadow:1px 1px 4px rgba(0,0,0,.2);flex-shrink:0;background:var(--border-l)}
+.cover-placeholder{width:36px;height:54px;border-radius:3px;background:linear-gradient(135deg,var(--accent) 0%,var(--accent-l) 100%);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:16px}
+.cover-cell{display:flex;align-items:center;gap:10px}
+.cover-modal{width:80px;height:120px;object-fit:cover;border-radius:4px;box-shadow:2px 2px 8px rgba(0,0,0,.2);float:right;margin:0 0 1rem 1rem}
 .tab-content{display:none}
 .tab-content.active{display:block}
 
@@ -295,7 +301,7 @@ textarea{resize:vertical;min-height:70px}
   <div class="table-wrap">
     <table>
       <thead><tr>
-        <th onclick="sortBy('title')">Title</th>
+        <th style="width:46px"></th><th onclick="sortBy('title')">Title</th>
         <th onclick="sortBy('author')">Author</th>
         <th onclick="sortBy('year')" class="sorted">Year ↓</th>
         <th>Genre</th>
@@ -390,6 +396,7 @@ textarea{resize:vertical;min-height:70px}
       <button class="modal-close" onclick="closeModal()">✕</button>
     </div>
     <div class="modal-body">
+      <img id="modal-cover" class="cover-modal" style="display:none" alt="Book cover">
       <div class="form-grid">
         <div class="form-group full"><label>Title *</label><input type="text" id="e-title"></div>
         <div class="form-group"><label>Author *</label><input type="text" id="e-author"></div>
@@ -503,6 +510,57 @@ function fetchFromSheets(){
   document.head.appendChild(s);
 }
 
+
+
+// ── book cover fetching (Google Books API) ────────────────────────────────────
+const coverCache = {};
+async function fetchCover(title, author){
+  const key = (title + author).toLowerCase().replace(/\s/g,'');
+  if(coverCache[key] !== undefined) return coverCache[key];
+  coverCache[key] = null; // mark as fetching
+  try {
+    const q = encodeURIComponent(title + ' ' + author);
+    const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${q}&maxResults=1&fields=items(volumeInfo/imageLinks)`);
+    const data = await res.json();
+    const url = data.items?.[0]?.volumeInfo?.imageLinks?.thumbnail || null;
+    // Upgrade to better quality by swapping zoom param
+    coverCache[key] = url ? url.replace('zoom=1','zoom=2').replace('http:','https:') : null;
+  } catch(e) {
+    coverCache[key] = null;
+  }
+  return coverCache[key];
+}
+
+async function loadCoversForPage(){
+  // Find all cover placeholders and load their images
+  const thumbs = document.querySelectorAll('[data-cover]');
+  for(const el of thumbs){
+    const title = el.dataset.title || '';
+    const author = el.dataset.author || '';
+    if(!title) continue;
+    const url = await fetchCover(title, author);
+    if(url){
+      const img = document.createElement('img');
+      img.src = url;
+      img.className = 'cover-thumb';
+      img.alt = title;
+      img.onerror = ()=>{}; // silently fail
+      el.replaceWith(img);
+    }
+  }
+}
+
+async function loadModalCover(title, author){
+  const el = document.getElementById('modal-cover');
+  if(!el) return;
+  el.style.display = 'none';
+  const url = await fetchCover(title, author);
+  if(url){
+    el.src = url;
+    el.style.display = 'block';
+    el.onerror = ()=>{ el.style.display='none'; };
+  }
+}
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 function nG(g){
@@ -699,6 +757,9 @@ function renderTablePage(){
     }
     const tid='t'+Math.random().toString(36).slice(2,7);
     html+=`<tr>
+      <td style="padding:6px 8px 6px 1rem;width:46px">
+        <div class="cover-placeholder" data-cover data-title="${(b.title||'').replace(/"/g,'')}" data-author="${(b.author||'').replace(/"/g,'')}">📖</div>
+      </td>
       <td style="font-weight:500;max-width:180px">
         <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${b.title||'—'}</div>
         ${b.thoughts?`<button class="thoughts-toggle" onclick="toggleT('${tid}')">notes ▾</button><div id="${tid}" class="thoughts-text" style="display:none">${b.thoughts}</div>`:''}
@@ -712,6 +773,7 @@ function renderTablePage(){
     </tr>`;
   });
   tbody.innerHTML=html;
+  loadCoversForPage();
   const pages=Math.ceil(rows.length/PAGE_SIZE);
   if(pages<=1){document.getElementById('pagination').innerHTML='';return;}
   let ph='';
@@ -745,8 +807,9 @@ function openEdit(id){
   document.getElementById('e-thoughts').value=b.thoughts||'';
   document.getElementById('modalOverlay').classList.add('open');
   document.body.style.overflow='hidden';
+  loadModalCover(b.title||'', b.author||'');
 }
-function closeModal(){document.getElementById('modalOverlay').classList.remove('open');document.body.style.overflow='';editingId=null;}
+function closeModal(){document.getElementById('modalOverlay').classList.remove('open');document.body.style.overflow='';editingId=null;const mc=document.getElementById('modal-cover');if(mc)mc.style.display='none';}
 function closeModalIfBg(e){if(e.target===document.getElementById('modalOverlay'))closeModal();}
 function saveEdit(){
   if(!editingId)return;
