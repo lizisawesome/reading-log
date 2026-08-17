@@ -520,7 +520,7 @@ async function fetchCover(title, author){
   coverCache[key] = null; // mark as fetching
   try {
     const q = encodeURIComponent(title + ' ' + author);
-    const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${q}&maxResults=1&fields=items(volumeInfo/imageLinks)`);
+    const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${q}&maxResults=1&fields=items(volumeInfo/imageLinks)&key=AIzaSyCZxuk7TDryd_OHqQeJbce3jX16TJDIXpM`);
     const data = await res.json();
     const url = data.items?.[0]?.volumeInfo?.imageLinks?.thumbnail || null;
     // Upgrade to better quality by swapping zoom param
