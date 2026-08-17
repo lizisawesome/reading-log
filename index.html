@@ -532,20 +532,28 @@ async function fetchCover(title, author){
 }
 
 async function loadCoversForPage(){
-  // Find all cover placeholders and load their images
-  const thumbs = document.querySelectorAll('[data-cover]');
-  for(const el of thumbs){
-    const title = el.dataset.title || '';
-    const author = el.dataset.author || '';
-    if(!title) continue;
-    const url = await fetchCover(title, author);
-    if(url){
-      const img = document.createElement('img');
-      img.src = url;
-      img.className = 'cover-thumb';
-      img.alt = title;
-      img.onerror = ()=>{}; // silently fail
-      el.replaceWith(img);
+  const thumbs = Array.from(document.querySelectorAll('[data-cover]'));
+  // Process in small batches with delay to avoid rate limiting
+  const BATCH = 3, DELAY = 600;
+  for(let i = 0; i < thumbs.length; i += BATCH){
+    const batch = thumbs.slice(i, i + BATCH);
+    await Promise.all(batch.map(async el => {
+      const title = el.dataset.title || '';
+      const author = el.dataset.author || '';
+      if(!title) return;
+      const url = await fetchCover(title, author);
+      if(url && el.isConnected){
+        const img = document.createElement('img');
+        img.src = url;
+        img.className = 'cover-thumb';
+        img.alt = title;
+        img.onerror = ()=>{};
+        el.replaceWith(img);
+      }
+    }));
+    // Small delay between batches
+    if(i + BATCH < thumbs.length){
+      await new Promise(r => setTimeout(r, DELAY));
     }
   }
 }
