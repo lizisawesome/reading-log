@@ -747,6 +747,11 @@ function renderTablePage(){
     let av=a[sortCol],bv=b[sortCol];
     if(sortCol==='title'||sortCol==='author'){av=(av||'').toLowerCase();bv=(bv||'').toLowerCase();}
     if(av==null)return 1;if(bv==null)return -1;
+    if(av===bv&&sortCol==='year'){
+      const am=a.month||0,bm=b.month||0;
+      if(bm!==am)return bm-am;
+      return (b.addedAt||0)-(a.addedAt||0);
+    }
     return av<bv?-sortDir:av>bv?sortDir:0;
   });
   document.getElementById('tableCount').textContent=`${rows.length.toLocaleString()} books`;
